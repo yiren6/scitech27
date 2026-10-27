@@ -1,0 +1,350 @@
+{
+  "created": "2026-10-27T05:21:46",
+  "description": "GNN4 autoregressor on the delta-wing 11-feature panel graph. Node feature 0 and the target are raw HF CFD \u0394Cp. Errors below are on that same \u0394Cp.",
+  "error_definition": {
+    "rmse": "sqrt(mean((prediction - HF \u0394Cp)^2))",
+    "nrmse_std": "rmse / std(HF \u0394Cp)",
+    "nrmse_range": "rmse / (max(HF \u0394Cp) - min(HF \u0394Cp))",
+    "mae": "mean(abs(prediction - HF \u0394Cp))",
+    "mse": "mean((prediction - HF \u0394Cp)^2)",
+    "mse_normalized": "mean squared error of the network output against the training target"
+  },
+  "checkpoint_selected_by": "training SmoothL1 on the 80% split",
+  "hyperparameters": {
+    "hidden_channels": 16,
+    "heads": 1,
+    "hop": 8,
+    "alpha": 0.9174413843648693,
+    "dropout": 0.016460271735982045,
+    "learning_rate": 0.020992316171733128,
+    "weight_decay": 4.369799923564499e-05,
+    "noise": 0.03,
+    "clip_value": 30.0,
+    "batch_size": 64,
+    "epochs_requested": 3000,
+    "patience": 30,
+    "scheduler_patience": 4,
+    "penalty_weight": 0.0,
+    "seed": 3407,
+    "test_size": 0.3,
+    "n_parameters": 16903
+  },
+  "split": {
+    "n_fit": 28,
+    "n_holdout": 12,
+    "n_test_geometry": 44,
+    "fit_files": {
+      "pklData_deltawing_sweep_55_naca_0010.pkl": 28
+    },
+    "holdout_files": {
+      "pklData_deltawing_sweep_55_naca_0010.pkl": 12
+    },
+    "test_files": {
+      "pklData_deltawing_sweep_60_naca_0013_validation.pkl": 11,
+      "pklData_deltawing_sweep_60_naca_3416_validation.pkl": 11,
+      "pklData_deltawing_sweep_70_naca_0013_validation.pkl": 11,
+      "pklData_deltawing_sweep_70_naca_3416_validation.pkl": 11
+    }
+  },
+  "training_report": {
+    "fit": {
+      "mse": 1.7166098356246948,
+      "rmse": 1.3101945792990806,
+      "mae": 1.1755478382110596,
+      "nrmse_std": 2.911641930202695,
+      "nrmse_range": 0.39524183714486005,
+      "mse_normalized": 1.7166098356246948,
+      "n_panels": 25200,
+      "target_std": 0.4499847888946533,
+      "target_min": -0.46399423480033875,
+      "target_max": 2.850924491882324,
+      "n_cases": 28,
+      "by_source": {
+        "pklData_deltawing_sweep_55_naca_0010.pkl": {
+          "mse": 1.7166098356246948,
+          "rmse": 1.3101945792990806,
+          "mae": 1.1755478382110596,
+          "nrmse_std": 2.911641930202695,
+          "nrmse_range": 0.39524183714486005,
+          "mse_normalized": 1.7166098356246948,
+          "n_panels": 25200,
+          "target_std": 0.4499847888946533,
+          "target_min": -0.46399423480033875,
+          "target_max": 2.850924491882324,
+          "n_cases": 28
+        }
+      }
+    },
+    "holdout": {
+      "mse": 1.6216099262237549,
+      "rmse": 1.2734244878373255,
+      "mae": 1.1170575618743896,
+      "nrmse_std": 2.8087072933101607,
+      "nrmse_range": 0.39118263216350363,
+      "mse_normalized": 1.6216099262237549,
+      "n_panels": 10800,
+      "target_std": 0.45338454842567444,
+      "target_min": -0.4258200228214264,
+      "target_max": 2.8294994831085205,
+      "n_cases": 12,
+      "by_source": {
+        "pklData_deltawing_sweep_55_naca_0010.pkl": {
+          "mse": 1.6216099262237549,
+          "rmse": 1.2734244878373255,
+          "mae": 1.1170575618743896,
+          "nrmse_std": 2.8087072933101607,
+          "nrmse_range": 0.39118263216350363,
+          "mse_normalized": 1.6216099262237549,
+          "n_panels": 10800,
+          "target_std": 0.45338454842567444,
+          "target_min": -0.4258200228214264,
+          "target_max": 2.8294994831085205,
+          "n_cases": 12
+        }
+      }
+    },
+    "history": [
+      {
+        "epoch": 0,
+        "train_smoothl1": 1.8227940797805786,
+        "learning_rate": 0.020992316171733128,
+        "holdout_rmse": 1.2212266455518845,
+        "holdout_nrmse_std": 2.6935780008217156,
+        "holdout_mse": 1.4913945198059082
+      },
+      {
+        "epoch": 1,
+        "train_smoothl1": 1.8334698677062988,
+        "learning_rate": 0.020992316171733128,
+        "holdout_rmse": 1.3893361494678895,
+        "holdout_nrmse_std": 3.0643658993060066,
+        "holdout_mse": 1.9302549362182617
+      },
+      {
+        "epoch": 2,
+        "train_smoothl1": 1.2718912363052368,
+        "learning_rate": 0.020992316171733128,
+        "holdout_rmse": 1.2734244878373255,
+        "holdout_nrmse_std": 2.8087072933101607,
+        "holdout_mse": 1.6216099262237549
+      }
+    ]
+  },
+  "test_report": {
+    "mse": 2.7326905727386475,
+    "rmse": 1.6530851680233076,
+    "mae": 1.5051523447036743,
+    "nrmse_std": 3.2753128623366354,
+    "nrmse_range": 0.40982346474090287,
+    "mse_normalized": 2.7326905727386475,
+    "n_panels": 39600,
+    "target_std": 0.5047106146812439,
+    "target_min": -1.026145100593567,
+    "target_max": 3.007506847381592,
+    "n_cases": 44,
+    "by_source": {
+      "pklData_deltawing_sweep_60_naca_0013_validation.pkl": {
+        "mse": 2.354285955429077,
+        "rmse": 1.534368259391818,
+        "mae": 1.4237205982208252,
+        "nrmse_std": 3.393975393145945,
+        "nrmse_range": 0.4808778071230557,
+        "mse_normalized": 2.354285955429077,
+        "n_panels": 9900,
+        "target_std": 0.45208585262298584,
+        "target_min": -0.3448534309864044,
+        "target_max": 2.845911979675293,
+        "n_cases": 11
+      },
+      "pklData_deltawing_sweep_60_naca_3416_validation.pkl": {
+        "mse": 3.40809965133667,
+        "rmse": 1.8461039113052846,
+        "mae": 1.7202473878860474,
+        "nrmse_std": 3.4891383036007118,
+        "nrmse_range": 0.5086329299303829,
+        "mse_normalized": 3.40809965133667,
+        "n_panels": 9900,
+        "target_std": 0.529100239276886,
+        "target_min": -0.6220338344573975,
+        "target_max": 3.007506847381592,
+        "n_cases": 11
+      },
+      "pklData_deltawing_sweep_70_naca_0013_validation.pkl": {
+        "mse": 2.18819522857666,
+        "rmse": 1.4792549572594509,
+        "mae": 1.303521990776062,
+        "nrmse_std": 3.0679363855577235,
+        "nrmse_range": 0.45699064401988754,
+        "mse_normalized": 2.18819522857666,
+        "n_panels": 9900,
+        "target_std": 0.4821661114692688,
+        "target_min": -0.6273738145828247,
+        "target_max": 2.609574317932129,
+        "n_cases": 11
+      },
+      "pklData_deltawing_sweep_70_naca_3416_validation.pkl": {
+        "mse": 2.9801812171936035,
+        "rmse": 1.7263201375160993,
+        "mae": 1.5731196403503418,
+        "nrmse_std": 3.3713993776627977,
+        "nrmse_range": 0.4412280154492829,
+        "mse_normalized": 2.9801812171936035,
+        "n_panels": 9900,
+        "target_std": 0.5120485424995422,
+        "target_min": -1.026145100593567,
+        "target_max": 2.886389970779419,
+        "n_cases": 11
+      }
+    }
+  },
+  "training_fit": {
+    "mse": 1.7166098356246948,
+    "rmse": 1.3101945792990806,
+    "mae": 1.1755478382110596,
+    "nrmse_std": 2.911641930202695,
+    "nrmse_range": 0.39524183714486005,
+    "mse_normalized": 1.7166098356246948,
+    "n_panels": 25200,
+    "target_std": 0.4499847888946533,
+    "target_min": -0.46399423480033875,
+    "target_max": 2.850924491882324,
+    "n_cases": 28,
+    "by_source": {
+      "pklData_deltawing_sweep_55_naca_0010.pkl": {
+        "mse": 1.7166098356246948,
+        "rmse": 1.3101945792990806,
+        "mae": 1.1755478382110596,
+        "nrmse_std": 2.911641930202695,
+        "nrmse_range": 0.39524183714486005,
+        "mse_normalized": 1.7166098356246948,
+        "n_panels": 25200,
+        "target_std": 0.4499847888946533,
+        "target_min": -0.46399423480033875,
+        "target_max": 2.850924491882324,
+        "n_cases": 28
+      }
+    }
+  },
+  "training_geometry_holdout": {
+    "mse": 1.6216099262237549,
+    "rmse": 1.2734244878373255,
+    "mae": 1.1170575618743896,
+    "nrmse_std": 2.8087072933101607,
+    "nrmse_range": 0.39118263216350363,
+    "mse_normalized": 1.6216099262237549,
+    "n_panels": 10800,
+    "target_std": 0.45338454842567444,
+    "target_min": -0.4258200228214264,
+    "target_max": 2.8294994831085205,
+    "n_cases": 12,
+    "by_source": {
+      "pklData_deltawing_sweep_55_naca_0010.pkl": {
+        "mse": 1.6216099262237549,
+        "rmse": 1.2734244878373255,
+        "mae": 1.1170575618743896,
+        "nrmse_std": 2.8087072933101607,
+        "nrmse_range": 0.39118263216350363,
+        "mse_normalized": 1.6216099262237549,
+        "n_panels": 10800,
+        "target_std": 0.45338454842567444,
+        "target_min": -0.4258200228214264,
+        "target_max": 2.8294994831085205,
+        "n_cases": 12
+      }
+    }
+  },
+  "test_geometry": {
+    "mse": 2.7326905727386475,
+    "rmse": 1.6530851680233076,
+    "mae": 1.5051523447036743,
+    "nrmse_std": 3.2753128623366354,
+    "nrmse_range": 0.40982346474090287,
+    "mse_normalized": 2.7326905727386475,
+    "n_panels": 39600,
+    "target_std": 0.5047106146812439,
+    "target_min": -1.026145100593567,
+    "target_max": 3.007506847381592,
+    "n_cases": 44,
+    "by_source": {
+      "pklData_deltawing_sweep_60_naca_0013_validation.pkl": {
+        "mse": 2.354285955429077,
+        "rmse": 1.534368259391818,
+        "mae": 1.4237205982208252,
+        "nrmse_std": 3.393975393145945,
+        "nrmse_range": 0.4808778071230557,
+        "mse_normalized": 2.354285955429077,
+        "n_panels": 9900,
+        "target_std": 0.45208585262298584,
+        "target_min": -0.3448534309864044,
+        "target_max": 2.845911979675293,
+        "n_cases": 11
+      },
+      "pklData_deltawing_sweep_60_naca_3416_validation.pkl": {
+        "mse": 3.40809965133667,
+        "rmse": 1.8461039113052846,
+        "mae": 1.7202473878860474,
+        "nrmse_std": 3.4891383036007118,
+        "nrmse_range": 0.5086329299303829,
+        "mse_normalized": 3.40809965133667,
+        "n_panels": 9900,
+        "target_std": 0.529100239276886,
+        "target_min": -0.6220338344573975,
+        "target_max": 3.007506847381592,
+        "n_cases": 11
+      },
+      "pklData_deltawing_sweep_70_naca_0013_validation.pkl": {
+        "mse": 2.18819522857666,
+        "rmse": 1.4792549572594509,
+        "mae": 1.303521990776062,
+        "nrmse_std": 3.0679363855577235,
+        "nrmse_range": 0.45699064401988754,
+        "mse_normalized": 2.18819522857666,
+        "n_panels": 9900,
+        "target_std": 0.4821661114692688,
+        "target_min": -0.6273738145828247,
+        "target_max": 2.609574317932129,
+        "n_cases": 11
+      },
+      "pklData_deltawing_sweep_70_naca_3416_validation.pkl": {
+        "mse": 2.9801812171936035,
+        "rmse": 1.7263201375160993,
+        "mae": 1.5731196403503418,
+        "nrmse_std": 3.3713993776627977,
+        "nrmse_range": 0.4412280154492829,
+        "mse_normalized": 2.9801812171936035,
+        "n_panels": 9900,
+        "target_std": 0.5120485424995422,
+        "target_min": -1.026145100593567,
+        "target_max": 2.886389970779419,
+        "n_cases": 11
+      }
+    }
+  },
+  "history": [
+    {
+      "epoch": 0,
+      "train_smoothl1": 1.8227940797805786,
+      "learning_rate": 0.020992316171733128,
+      "holdout_rmse": 1.2212266455518845,
+      "holdout_nrmse_std": 2.6935780008217156,
+      "holdout_mse": 1.4913945198059082
+    },
+    {
+      "epoch": 1,
+      "train_smoothl1": 1.8334698677062988,
+      "learning_rate": 0.020992316171733128,
+      "holdout_rmse": 1.3893361494678895,
+      "holdout_nrmse_std": 3.0643658993060066,
+      "holdout_mse": 1.9302549362182617
+    },
+    {
+      "epoch": 2,
+      "train_smoothl1": 1.2718912363052368,
+      "learning_rate": 0.020992316171733128,
+      "holdout_rmse": 1.2734244878373255,
+      "holdout_nrmse_std": 2.8087072933101607,
+      "holdout_mse": 1.6216099262237549
+    }
+  ],
+  "status": "pruned"
+}
