@@ -1,9 +1,14 @@
 """Run nested multi-fidelity scaling experiments.
 
-Fractions are nested subsets of ``dataset/train_set`` for each seed. Each
-subset is split into a fit set and a training-geometry validation holdout.
-Optuna sees only the holdout RMSE; ``dataset/new_geom`` is reserved for final
-scoring after the best trial is selected.
+For each seed and fraction of ``dataset/train_set``:
+
+1. Draw a nested random subset of training-geometry snapshots.
+2. Split that subset 70/30 into training and validation cases.
+3. Run Optuna (~30 trials) over batch size and learning rate centered on
+   the scaling-law values
+   ``B★ = B_ref·N/N_ref`` and ``α★ = α_ref·(N/N_ref)^(-0.5)``,
+   where ``N`` is the fit-set size. Selection uses validation RMSE only.
+4. Score the best trial on all snapshots in ``dataset/new_geom``.
 
 The model, parser, and training procedure are imported from cnfvortexnetff;
 this runner does not modify that project.
@@ -43,16 +48,23 @@ from VortexNet import DataParser, GNN4, train_model_k_fold  # noqa: E402
 SEEDS = (7, 27, 3407, 207, 353)
 FRACTIONS = (0.06, 0.10, 0.16, 0.20, 0.40, 0.60, 0.80, 1.0)
 
-HIDDEN_CHANNELS = 63
-HEADS = 4
-PENALTY_WEIGHT = 0.025689113034518467
-DROPOUT_WEIGHT = 0.08504544001617964
-LAMBDA = 5.8267381175451374e-05
-ALPHA = 0.009705552281881635
-HOP = 10
-MAX_PHY_LOSS = 0.4175220124520909
-NOISE = 0.03
-CLIP_VALUE = 30.0
+# Fixed model / physics settings. --learning-rate is α_ref for scaling.
+DEFAULT_HIDDEN_CHANNELS = 63
+DEFAULT_HEADS = 4
+DEFAULT_PENALTY_WEIGHT = 0.025689113034518467
+DEFAULT_DROPOUT = 0.08504544001617964
+DEFAULT_LAMBDA = 5.8267381175451374e-05
+DEFAULT_ALPHA = 0.009705552281881635
+DEFAULT_HOP = 10
+DEFAULT_MAX_PHY_LOSS = 0.4175220124520909
+DEFAULT_NOISE = 0.03
+DEFAULT_CLIP_VALUE = 30.0
+DEFAULT_LEARNING_RATE = 1e-3  # α_ref
+DEFAULT_DECAY = 5e-6
+DEFAULT_N_REF = 420
+DEFAULT_BATCH_SIZE_REF = 32
+DEFAULT_N_TRIALS = 30
+
 REF_RE = 10**7
 REF_LENGTH = 0.435762
 ROOT_CHORD_REF = 0.6536436
@@ -116,7 +128,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-dir",
-        default=str(REPO_ROOT / "train_mf_scaling_results"),
+        default=str(REPO_ROOT / "train_mf_scaling_autohp_results"),
     )
     parser.add_argument("--seeds", nargs="+", type=int, default=list(SEEDS))
     parser.add_argument(
@@ -125,22 +137,122 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=float,
         choices=FRACTIONS,
         default=list(FRACTIONS),
-        help="Fractions of dataset/train_set to sample.",
+        help="Fractions of dataset/train_set to sample (nested per seed).",
     )
-    parser.add_argument("--n-trials", type=int, default=10)
     parser.add_argument("--epochs", type=int, default=3000)
-    parser.add_argument("--folds", type=int, default=4)
+    parser.add_argument(
+        "--folds",
+        type=int,
+        default=4,
+        help="K-fold CV folds used by the CNF trainer on the 70%% fit set.",
+    )
     parser.add_argument(
         "--test-size",
         type=float,
         default=0.3,
-        help="Training-geometry holdout fraction available to Optuna.",
+        help="Fraction of each nested subset held out for Optuna selection.",
+    )
+    parser.add_argument(
+        "--n-trials",
+        type=int,
+        default=DEFAULT_N_TRIALS,
+        help="Optuna trials per seed/fraction searching batch size and learning rate.",
     )
     parser.add_argument(
         "--device",
         default="cuda" if torch.cuda.is_available() else "cpu",
     )
+
+    scale = parser.add_argument_group("scaling-law reference centers")
+    scale.add_argument(
+        "--n-ref",
+        type=int,
+        default=DEFAULT_N_REF,
+        help="Reference fit-set size N_ref for B★ and α★.",
+    )
+    scale.add_argument(
+        "--batch-size-ref",
+        type=int,
+        default=DEFAULT_BATCH_SIZE_REF,
+        help="Reference batch size B_ref; B★ = B_ref·N/N_ref.",
+    )
+    scale.add_argument(
+        "--learning-rate",
+        type=float,
+        default=DEFAULT_LEARNING_RATE,
+        help="Reference learning rate α_ref; α★ = α_ref·(N/N_ref)^(-0.5).",
+    )
+
+    hp = parser.add_argument_group("fixed model / training hyperparameters")
+    hp.add_argument("--decay", type=float, default=DEFAULT_DECAY)
+    hp.add_argument("--hidden-channels", type=int, default=DEFAULT_HIDDEN_CHANNELS)
+    hp.add_argument("--heads", type=int, default=DEFAULT_HEADS)
+    hp.add_argument("--dropout", type=float, default=DEFAULT_DROPOUT)
+    hp.add_argument("--penalty-weight", type=float, default=DEFAULT_PENALTY_WEIGHT)
+    hp.add_argument("--Lambda", type=float, default=DEFAULT_LAMBDA, dest="Lambda")
+    hp.add_argument("--alpha", type=float, default=DEFAULT_ALPHA)
+    hp.add_argument("--hop", type=int, default=DEFAULT_HOP)
+    hp.add_argument("--max-phy-loss", type=float, default=DEFAULT_MAX_PHY_LOSS)
+    hp.add_argument("--noise", type=float, default=DEFAULT_NOISE)
+    hp.add_argument("--clip-value", type=float, default=DEFAULT_CLIP_VALUE)
     return parser.parse_args(argv)
+
+
+def _fixed_hyperparameters(args: argparse.Namespace) -> dict:
+    return {
+        "decay": args.decay,
+        "hidden_channels": args.hidden_channels,
+        "heads": args.heads,
+        "dropout": args.dropout,
+        "penalty_weight": args.penalty_weight,
+        "Lambda": args.Lambda,
+        "alpha": args.alpha,
+        "hop": args.hop,
+        "max_phy_loss": args.max_phy_loss,
+        "noise": args.noise,
+        "clip_value": args.clip_value,
+        "epochs": args.epochs,
+        "folds": args.folds,
+        "test_size": args.test_size,
+        "n_ref": args.n_ref,
+        "batch_size_ref": args.batch_size_ref,
+        "learning_rate_ref": args.learning_rate,
+        "n_trials": args.n_trials,
+    }
+
+
+def _scaling_centers(
+    *,
+    n_training: int,
+    n_ref: int,
+    batch_size_ref: int,
+    learning_rate_ref: float,
+) -> dict:
+    ratio = n_training / n_ref
+    batch_size_star = batch_size_ref * ratio
+    learning_rate_star = learning_rate_ref * (ratio**-0.5)
+    batch_low, batch_high = _batch_size_bounds(batch_size_star, n_training)
+    return {
+        "n_training": n_training,
+        "n_ref": n_ref,
+        "batch_size_ref": batch_size_ref,
+        "learning_rate_ref": learning_rate_ref,
+        "batch_size_star": batch_size_star,
+        "learning_rate_star": learning_rate_star,
+        "batch_size_low": batch_low,
+        "batch_size_high": batch_high,
+        "learning_rate_low": learning_rate_star / 10.0,
+        "learning_rate_high": learning_rate_star * 10.0,
+    }
+
+
+def _batch_size_bounds(batch_size_star: float, n_training: int) -> tuple[int, int]:
+    low = max(1, int(round(batch_size_star / 4.0)))
+    high = min(n_training, max(1, int(round(batch_size_star * 4.0))))
+    if high < low:
+        center = max(1, min(n_training, int(round(batch_size_star))))
+        low = high = center
+    return low, high
 
 
 def _set_seed(seed: int) -> None:
@@ -318,16 +430,16 @@ def _case_metadata(cases: list, dataset_index: int) -> dict:
     }
 
 
-def _model(device: torch.device) -> GNN4:
+def _model(args: argparse.Namespace, device: torch.device) -> GNN4:
     return GNN4(
         node_in_channels=11,
         edge_in_channels=1,
-        hidden_channels=HIDDEN_CHANNELS,
+        hidden_channels=args.hidden_channels,
         out_channels=1,
-        dropout_rate=DROPOUT_WEIGHT,
-        HEADS=HEADS,
-        ALPHA=ALPHA,
-        HOP=HOP,
+        dropout_rate=args.dropout,
+        HEADS=args.heads,
+        ALPHA=args.alpha,
+        HOP=args.hop,
     ).to(device)
 
 
@@ -390,7 +502,7 @@ def _evaluate_graphs(
     return summary
 
 
-def _write_study_summary(study: optuna.Study, path: Path) -> None:
+def _write_study_summary(study: optuna.Study, path: Path, centers: dict) -> None:
     trials = [
         {
             "number": trial.number,
@@ -412,6 +524,7 @@ def _write_study_summary(study: optuna.Study, path: Path) -> None:
             "study": study.study_name,
             "direction": "minimize",
             "objective": "training_geometry_holdout.rmse",
+            "scaling_centers": centers,
             "n_trials": len(study.trials),
             "best_trial": None
             if best is None
@@ -444,7 +557,13 @@ def _write_aggregate(output_dir: Path, result: dict) -> None:
         {
             "updated": datetime.now().isoformat(timespec="seconds"),
             "subset_sampling": "Nested random subsets of dataset/train_set per seed.",
+            "validation_split": "70/30 training/validation within each nested subset.",
             "objective": "training_geometry_holdout.rmse",
+            "optuna": (
+                "Per fraction, search batch_size and learning_rate around "
+                "B★=B_ref·N/N_ref and α★=α_ref·(N/N_ref)^(-0.5)."
+            ),
+            "test_set": "dataset/new_geom (reported only; not used for selection).",
             "test_set_used_for_selection": False,
             "results": results,
         },
@@ -595,8 +714,8 @@ def _run_fraction(
 
     fraction_dir = output_dir / f"seed_{seed}" / f"fraction_{percent:02d}"
     fraction_dir.mkdir(parents=True, exist_ok=True)
-    best_dir = fraction_dir / "best"
-    best_dir.mkdir(parents=True, exist_ok=True)
+    run_dir = fraction_dir / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
     trials_dir = fraction_dir / "trials"
     trials_dir.mkdir(parents=True, exist_ok=True)
 
@@ -612,6 +731,13 @@ def _run_fraction(
     validation_sources = [cases[index].source_file for index in validation_indices]
     test_sources = [case.source_file for case in test_cases]
 
+    centers = _scaling_centers(
+        n_training=len(fit_indices),
+        n_ref=args.n_ref,
+        batch_size_ref=args.batch_size_ref,
+        learning_rate_ref=args.learning_rate,
+    )
+
     split = {
         "seed": seed,
         "fraction": fraction,
@@ -622,6 +748,7 @@ def _run_fraction(
         "n_selected": len(selected_indices),
         "n_training": len(fit_indices),
         "n_validation": len(validation_indices),
+        "scaling_centers": centers,
         "selected_cases": [_case_metadata(cases, int(i)) for i in selected_indices],
         "training_cases": [_case_metadata(cases, i) for i in fit_indices],
         "validation_cases": [_case_metadata(cases, i) for i in validation_indices],
@@ -643,6 +770,15 @@ def _run_fraction(
         folds=args.folds,
     )
 
+    print(
+        f"Seed {seed}, {percent}% scaling centers: "
+        f"N={centers['n_training']}, "
+        f"B★={centers['batch_size_star']:.4g} "
+        f"[{centers['batch_size_low']}, {centers['batch_size_high']}], "
+        f"α★={centers['learning_rate_star']:.6g} "
+        f"[{centers['learning_rate_low']:.6g}, {centers['learning_rate_high']:.6g}]"
+    )
+
     study = optuna.create_study(
         study_name=f"mf_scaling_seed_{seed}_fraction_{percent:02d}",
         direction="minimize",
@@ -653,9 +789,18 @@ def _run_fraction(
 
     def objective(trial: optuna.Trial) -> float:
         _set_seed(CV_RANDOM_STATE + trial.number)
-        learning_rate = trial.suggest_float("learning_rate", 1e-4, 8e-3, log=True)
-        decay = trial.suggest_float("decay", 1e-6, 1e-5, log=True)
-        model = _model(device)
+        batch_size = trial.suggest_int(
+            "batch_size",
+            centers["batch_size_low"],
+            centers["batch_size_high"],
+        )
+        learning_rate = trial.suggest_float(
+            "learning_rate",
+            centers["learning_rate_low"],
+            centers["learning_rate_high"],
+            log=True,
+        )
+        model = _model(args, device)
         with _working_directory(fraction_dir):
             fold_losses, trained_model, mean_validation_loss = train_model_k_fold(
                 model,
@@ -663,13 +808,14 @@ def _run_fraction(
                 k=args.folds,
                 learning_rate=learning_rate,
                 epochs=args.epochs,
-                clip_value=CLIP_VALUE,
-                noise_level=NOISE,
-                penalty_weight=PENALTY_WEIGHT,
+                clip_value=args.clip_value,
+                noise_level=args.noise,
+                penalty_weight=args.penalty_weight,
                 device=str(device),
-                Lambda=LAMBDA,
-                decay=decay,
-                max_phy_loss=MAX_PHY_LOSS,
+                Lambda=args.Lambda,
+                decay=args.decay,
+                max_phy_loss=args.max_phy_loss,
+                batch_size=batch_size,
             )
         holdout_metrics = _evaluate_graphs(
             trained_model, validation_graphs, validation_sources, device
@@ -686,7 +832,8 @@ def _run_fraction(
             torch.cuda.empty_cache()
         print(
             f"Seed {seed}, {percent}% trial {trial.number}: "
-            f"training-geometry holdout RMSE {holdout_metrics['rmse']:.6g}"
+            f"batch_size={batch_size}, lr={learning_rate:.6g}, "
+            f"validation RMSE {holdout_metrics['rmse']:.6g}"
         )
         return float(holdout_metrics["rmse"])
 
@@ -705,8 +852,8 @@ def _run_fraction(
         raise RuntimeError(f"No completed Optuna trial for seed {seed}, {percent}%.")
     best_trial = min(completed_trials, key=lambda trial: trial.value)
     candidate_path = trials_dir / f"trial_{best_trial.number:03d}.pt"
-    report_path = best_dir / "report.json"
-    model_path = best_dir / "model.pth"
+    report_path = run_dir / "report.json"
+    model_path = run_dir / "model.pth"
 
     if candidate_path.is_file():
         shutil.copy2(candidate_path, model_path)
@@ -720,10 +867,14 @@ def _run_fraction(
             f"Best trial checkpoint is missing for seed {seed}, {percent}%."
         )
 
-    model = _model(device)
+    model = _model(args, device)
     model.load_state_dict(torch.load(model_path, map_location=device))
-    final_test_metrics = _evaluate_graphs(model, test_graphs, test_sources, device)
+    validation_metrics = _evaluate_graphs(
+        model, validation_graphs, validation_sources, device
+    )
+    test_metrics = _evaluate_graphs(model, test_graphs, test_sources, device)
     del model
+
     report = {
         "seed": seed,
         "fraction": fraction,
@@ -735,20 +886,28 @@ def _run_fraction(
         "n_test_cases": len(test_graphs),
         "selection_split_seed": selection_split_seed,
         "cv_split_seed": CV_RANDOM_STATE,
+        "scaling_centers": centers,
         "best_trial": best_trial.number,
-        "holdout_rmse": float(best_trial.value),
+        "validation_rmse": float(best_trial.value),
         "cv_mean_validation_loss": best_trial.user_attrs.get(
             "cv_mean_validation_loss"
         ),
-        "final_test_geometry": final_test_metrics,
-        "hyperparameters": best_trial.params,
+        "fold_validation_losses": best_trial.user_attrs.get("fold_validation_losses"),
+        "validation_geometry": validation_metrics,
+        "final_test_geometry": test_metrics,
+        "test_rmse": float(test_metrics["rmse"]),
+        "best_params": best_trial.params,
+        "hyperparameters": {
+            **_fixed_hyperparameters(args),
+            **best_trial.params,
+        },
         "checkpoint": str(model_path),
-        "scaler": str(best_dir / "scaler.pkl"),
+        "scaler": str(run_dir / "scaler.pkl"),
         "split": str(fraction_dir / "split.json"),
     }
     _write_json(report_path, report)
-    parser.save_scaler(str(best_dir / "scaler.pkl"))
-    _write_study_summary(study, fraction_dir / "study_summary.json")
+    parser.save_scaler(str(run_dir / "scaler.pkl"))
+    _write_study_summary(study, fraction_dir / "study_summary.json", centers)
     _write_aggregate(output_dir, report)
 
     for trial in study.trials:
@@ -763,15 +922,19 @@ def _run_fraction(
         torch.cuda.empty_cache()
     print(
         f"Seed {seed}, {percent}% complete: "
-        f"Optuna holdout RMSE {report['holdout_rmse']:.6g}, "
-        f"new-geometry test RMSE {final_test_metrics['rmse']:.6g}"
+        f"best trial {best_trial.number} "
+        f"params={best_trial.params}, "
+        f"validation RMSE {report['validation_rmse']:.6g}, "
+        f"new-geometry test RMSE {report['test_rmse']:.6g}"
     )
     return report
 
 
 def run(args: argparse.Namespace) -> None:
-    if args.n_trials < 1 or args.epochs < 1 or args.folds < 2:
-        raise ValueError("--n-trials and --epochs must be positive; --folds must be at least 2.")
+    if args.epochs < 1 or args.folds < 2:
+        raise ValueError("--epochs must be positive; --folds must be at least 2.")
+    if args.n_trials < 1:
+        raise ValueError("--n-trials must be positive.")
     if not 0 < args.test_size < 1:
         raise ValueError("--test-size must be between 0 and 1.")
     if not args.seeds or len(set(args.seeds)) != len(args.seeds):
@@ -780,6 +943,12 @@ def run(args: argparse.Namespace) -> None:
         raise ValueError("Seed values must be non-negative.")
     if not args.fractions or len(set(args.fractions)) != len(args.fractions):
         raise ValueError("--fractions must contain unique fractions.")
+    if args.learning_rate <= 0 or args.decay < 0:
+        raise ValueError("--learning-rate must be positive; --decay must be non-negative.")
+    if args.n_ref < 1 or args.batch_size_ref < 1:
+        raise ValueError("--n-ref and --batch-size-ref must be positive integers.")
+    if args.hidden_channels < 1 or args.heads < 1 or args.hop < 1:
+        raise ValueError("--hidden-channels, --heads, and --hop must be positive integers.")
 
     train_dir = Path(args.train_dir).expanduser().resolve()
     test_dir = Path(args.test_dir).expanduser().resolve()
@@ -800,6 +969,10 @@ def run(args: argparse.Namespace) -> None:
             print(f"Training geometries: {train_dir}")
             print(f"Final test geometries: {test_dir}")
             print(f"Output: {output_dir}")
+            print(
+                "Fixed hyperparameters / scaling refs: "
+                f"{json.dumps(_fixed_hyperparameters(args), sort_keys=True)}"
+            )
 
             parser = _make_parser(train_dir, device, args.test_size)
             cases = _load_cases(train_dir, validation=False)
@@ -823,7 +996,6 @@ def run(args: argparse.Namespace) -> None:
                 )
 
             for seed in args.seeds:
-                _set_seed(seed)
                 for fraction in args.fractions:
                     _run_fraction(
                         args=args,
