@@ -4,14 +4,13 @@ For each seed and fraction of ``dataset/train_set``:
 
 1. Draw a nested random subset of training-geometry snapshots.
 2. Split that subset 70/30 into training and validation cases.
-3. Run Optuna (~30 trials) over batch size and learning rate centered on
-   the scaling-law values
-   ``B★ = B_ref·N/N_ref`` and ``α★ = α_ref·(N/N_ref)^(-0.5)``,
-   where ``N`` is the fit-set size. Selection uses validation RMSE only.
-4. Score the best trial on all snapshots in ``dataset/new_geom``.
-
-The model, parser, and training procedure are imported from cnfvortexnetff;
-this runner does not modify that project.
+3. Train once with the supplied hyperparameters (k-fold CV on the
+   training partition via the CNF trainer).
+4. Report validation metrics on the 30% holdout and test metrics on all
+   snapshots in ``dataset/new_geom``.
+5. The patience in train.py is set to 150
+Optuna is not used. The model, parser, and training procedure are imported
+from cnfvortexnetff; this runner does not modify that project.
 """
 
 from __future__ import annotations
@@ -25,7 +24,6 @@ import json
 import os
 import pickle
 import random
-import shutil
 import sys
 import types
 import traceback
@@ -33,7 +31,6 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-import optuna
 import torch
 from sklearn.model_selection import KFold, train_test_split
 
@@ -48,7 +45,7 @@ from VortexNet import DataParser, GNN4, train_model_k_fold  # noqa: E402
 SEEDS = (7, 27, 3407, 207, 353)
 FRACTIONS = (0.06, 0.10, 0.16, 0.20, 0.40, 0.60, 0.80, 1.0)
 
-# Fixed model / physics settings. --learning-rate is α_ref for scaling.
+# Defaults match the prior MF runner fixed settings; LR/decay replace Optuna.
 DEFAULT_HIDDEN_CHANNELS = 63
 DEFAULT_HEADS = 4
 DEFAULT_PENALTY_WEIGHT = 0.025689113034518467
@@ -59,11 +56,8 @@ DEFAULT_HOP = 10
 DEFAULT_MAX_PHY_LOSS = 0.4175220124520909
 DEFAULT_NOISE = 0.03
 DEFAULT_CLIP_VALUE = 30.0
-DEFAULT_LEARNING_RATE = 1e-3  # α_ref
-DEFAULT_DECAY = 5e-6
-DEFAULT_N_REF = 420
-DEFAULT_BATCH_SIZE_REF = 32
-DEFAULT_N_TRIALS = 30
+DEFAULT_LEARNING_RATE = 0.00031174552605096455
+DEFAULT_DECAY = 2.541927826436024e-06
 
 REF_RE = 10**7
 REF_LENGTH = 0.435762
@@ -128,7 +122,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-dir",
-        default=str(REPO_ROOT / "train_mf_scaling_autohp_results"),
+        default=str(REPO_ROOT / "train_mf_scaling_results"),
     )
     parser.add_argument("--seeds", nargs="+", type=int, default=list(SEEDS))
     parser.add_argument(
@@ -150,40 +144,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--test-size",
         type=float,
         default=0.3,
-        help="Fraction of each nested subset held out for Optuna selection.",
-    )
-    parser.add_argument(
-        "--n-trials",
-        type=int,
-        default=DEFAULT_N_TRIALS,
-        help="Optuna trials per seed/fraction searching batch size and learning rate.",
+        help="Fraction of each nested subset held out for validation reporting.",
     )
     parser.add_argument(
         "--device",
         default="cuda" if torch.cuda.is_available() else "cpu",
     )
 
-    scale = parser.add_argument_group("scaling-law reference centers")
-    scale.add_argument(
-        "--n-ref",
-        type=int,
-        default=DEFAULT_N_REF,
-        help="Reference fit-set size N_ref for B★ and α★.",
-    )
-    scale.add_argument(
-        "--batch-size-ref",
-        type=int,
-        default=DEFAULT_BATCH_SIZE_REF,
-        help="Reference batch size B_ref; B★ = B_ref·N/N_ref.",
-    )
-    scale.add_argument(
-        "--learning-rate",
-        type=float,
-        default=DEFAULT_LEARNING_RATE,
-        help="Reference learning rate α_ref; α★ = α_ref·(N/N_ref)^(-0.5).",
-    )
-
-    hp = parser.add_argument_group("fixed model / training hyperparameters")
+    hp = parser.add_argument_group("model / training hyperparameters")
+    hp.add_argument("--learning-rate", type=float, default=DEFAULT_LEARNING_RATE)
     hp.add_argument("--decay", type=float, default=DEFAULT_DECAY)
     hp.add_argument("--hidden-channels", type=int, default=DEFAULT_HIDDEN_CHANNELS)
     hp.add_argument("--heads", type=int, default=DEFAULT_HEADS)
@@ -198,8 +167,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _fixed_hyperparameters(args: argparse.Namespace) -> dict:
+def _hyperparameters(args: argparse.Namespace) -> dict:
     return {
+        "learning_rate": args.learning_rate,
         "decay": args.decay,
         "hidden_channels": args.hidden_channels,
         "heads": args.heads,
@@ -214,45 +184,7 @@ def _fixed_hyperparameters(args: argparse.Namespace) -> dict:
         "epochs": args.epochs,
         "folds": args.folds,
         "test_size": args.test_size,
-        "n_ref": args.n_ref,
-        "batch_size_ref": args.batch_size_ref,
-        "learning_rate_ref": args.learning_rate,
-        "n_trials": args.n_trials,
     }
-
-
-def _scaling_centers(
-    *,
-    n_training: int,
-    n_ref: int,
-    batch_size_ref: int,
-    learning_rate_ref: float,
-) -> dict:
-    ratio = n_training / n_ref
-    batch_size_star = batch_size_ref * ratio
-    learning_rate_star = learning_rate_ref * (ratio**-0.5)
-    batch_low, batch_high = _batch_size_bounds(batch_size_star, n_training)
-    return {
-        "n_training": n_training,
-        "n_ref": n_ref,
-        "batch_size_ref": batch_size_ref,
-        "learning_rate_ref": learning_rate_ref,
-        "batch_size_star": batch_size_star,
-        "learning_rate_star": learning_rate_star,
-        "batch_size_low": batch_low,
-        "batch_size_high": batch_high,
-        "learning_rate_low": learning_rate_star / 10.0,
-        "learning_rate_high": learning_rate_star * 10.0,
-    }
-
-
-def _batch_size_bounds(batch_size_star: float, n_training: int) -> tuple[int, int]:
-    low = max(1, int(round(batch_size_star / 4.0)))
-    high = min(n_training, max(1, int(round(batch_size_star * 4.0))))
-    if high < low:
-        center = max(1, min(n_training, int(round(batch_size_star))))
-        low = high = center
-    return low, high
 
 
 def _set_seed(seed: int) -> None:
@@ -502,42 +434,6 @@ def _evaluate_graphs(
     return summary
 
 
-def _write_study_summary(study: optuna.Study, path: Path, centers: dict) -> None:
-    trials = [
-        {
-            "number": trial.number,
-            "state": trial.state.name,
-            "value": trial.value,
-            "params": trial.params,
-            "user_attrs": trial.user_attrs,
-        }
-        for trial in study.trials
-    ]
-    completed = [
-        trial for trial in study.trials if trial.state == optuna.trial.TrialState.COMPLETE
-    ]
-    best = min(completed, key=lambda trial: trial.value) if completed else None
-    _write_json(
-        path,
-        {
-            "updated": datetime.now().isoformat(timespec="seconds"),
-            "study": study.study_name,
-            "direction": "minimize",
-            "objective": "training_geometry_holdout.rmse",
-            "scaling_centers": centers,
-            "n_trials": len(study.trials),
-            "best_trial": None
-            if best is None
-            else {
-                "number": best.number,
-                "value": best.value,
-                "params": best.params,
-            },
-            "trials": trials,
-        },
-    )
-
-
 def _write_aggregate(output_dir: Path, result: dict) -> None:
     summary_path = output_dir / "scaling_results.json"
     previous_results = []
@@ -558,13 +454,7 @@ def _write_aggregate(output_dir: Path, result: dict) -> None:
             "updated": datetime.now().isoformat(timespec="seconds"),
             "subset_sampling": "Nested random subsets of dataset/train_set per seed.",
             "validation_split": "70/30 training/validation within each nested subset.",
-            "objective": "training_geometry_holdout.rmse",
-            "optuna": (
-                "Per fraction, search batch_size and learning_rate around "
-                "B★=B_ref·N/N_ref and α★=α_ref·(N/N_ref)^(-0.5)."
-            ),
             "test_set": "dataset/new_geom (reported only; not used for selection).",
-            "test_set_used_for_selection": False,
             "results": results,
         },
     )
@@ -716,8 +606,6 @@ def _run_fraction(
     fraction_dir.mkdir(parents=True, exist_ok=True)
     run_dir = fraction_dir / "run"
     run_dir.mkdir(parents=True, exist_ok=True)
-    trials_dir = fraction_dir / "trials"
-    trials_dir.mkdir(parents=True, exist_ok=True)
 
     parser.nn_training_set = copy.deepcopy([raw_graphs[i] for i in fit_indices])
     parser.nn_test_set = copy.deepcopy(
@@ -731,13 +619,6 @@ def _run_fraction(
     validation_sources = [cases[index].source_file for index in validation_indices]
     test_sources = [case.source_file for case in test_cases]
 
-    centers = _scaling_centers(
-        n_training=len(fit_indices),
-        n_ref=args.n_ref,
-        batch_size_ref=args.batch_size_ref,
-        learning_rate_ref=args.learning_rate,
-    )
-
     split = {
         "seed": seed,
         "fraction": fraction,
@@ -748,7 +629,6 @@ def _run_fraction(
         "n_selected": len(selected_indices),
         "n_training": len(fit_indices),
         "n_validation": len(validation_indices),
-        "scaling_centers": centers,
         "selected_cases": [_case_metadata(cases, int(i)) for i in selected_indices],
         "training_cases": [_case_metadata(cases, i) for i in fit_indices],
         "validation_cases": [_case_metadata(cases, i) for i in validation_indices],
@@ -770,149 +650,60 @@ def _run_fraction(
         folds=args.folds,
     )
 
-    print(
-        f"Seed {seed}, {percent}% scaling centers: "
-        f"N={centers['n_training']}, "
-        f"B★={centers['batch_size_star']:.4g} "
-        f"[{centers['batch_size_low']}, {centers['batch_size_high']}], "
-        f"α★={centers['learning_rate_star']:.6g} "
-        f"[{centers['learning_rate_low']:.6g}, {centers['learning_rate_high']:.6g}]"
-    )
-
-    study = optuna.create_study(
-        study_name=f"mf_scaling_seed_{seed}_fraction_{percent:02d}",
-        direction="minimize",
-        sampler=optuna.samplers.TPESampler(seed=CV_RANDOM_STATE + percent),
-        storage=f"sqlite:///{fraction_dir / 'study.db'}",
-        load_if_exists=True,
-    )
-
-    def objective(trial: optuna.Trial) -> float:
-        _set_seed(CV_RANDOM_STATE + trial.number)
-        batch_size = trial.suggest_int(
-            "batch_size",
-            centers["batch_size_low"],
-            centers["batch_size_high"],
-        )
-        learning_rate = trial.suggest_float(
-            "learning_rate",
-            centers["learning_rate_low"],
-            centers["learning_rate_high"],
-            log=True,
-        )
-        model = _model(args, device)
-        with _working_directory(fraction_dir):
-            fold_losses, trained_model, mean_validation_loss = train_model_k_fold(
-                model,
-                training_graphs,
-                k=args.folds,
-                learning_rate=learning_rate,
-                epochs=args.epochs,
-                clip_value=args.clip_value,
-                noise_level=args.noise,
-                penalty_weight=args.penalty_weight,
-                device=str(device),
-                Lambda=args.Lambda,
-                decay=args.decay,
-                max_phy_loss=args.max_phy_loss,
-                batch_size=batch_size,
-            )
-        holdout_metrics = _evaluate_graphs(
-            trained_model, validation_graphs, validation_sources, device
-        )
-        trial.set_user_attr("fold_validation_losses", [float(v) for v in fold_losses])
-        trial.set_user_attr("cv_mean_validation_loss", float(mean_validation_loss))
-        trial.set_user_attr("holdout_rmse", holdout_metrics["rmse"])
-        trial.set_user_attr("holdout_mse", holdout_metrics["mse"])
-        checkpoint_path = trials_dir / f"trial_{trial.number:03d}.pt"
-        torch.save(trained_model.state_dict(), checkpoint_path)
-        del model, trained_model
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        print(
-            f"Seed {seed}, {percent}% trial {trial.number}: "
-            f"batch_size={batch_size}, lr={learning_rate:.6g}, "
-            f"validation RMSE {holdout_metrics['rmse']:.6g}"
-        )
-        return float(holdout_metrics["rmse"])
-
-    remaining_trials = max(0, args.n_trials - len(study.trials))
-    if remaining_trials:
-        print(
-            f"Seed {seed}, {percent}%: running {remaining_trials} "
-            f"of {args.n_trials} Optuna trials"
-        )
-        study.optimize(objective, n_trials=remaining_trials)
-
-    completed_trials = [
-        trial for trial in study.trials if trial.state == optuna.trial.TrialState.COMPLETE
-    ]
-    if not completed_trials:
-        raise RuntimeError(f"No completed Optuna trial for seed {seed}, {percent}%.")
-    best_trial = min(completed_trials, key=lambda trial: trial.value)
-    candidate_path = trials_dir / f"trial_{best_trial.number:03d}.pt"
-    report_path = run_dir / "report.json"
-    model_path = run_dir / "model.pth"
-
-    if candidate_path.is_file():
-        shutil.copy2(candidate_path, model_path)
-    elif (
-        not model_path.is_file()
-        or not report_path.is_file()
-        or int(json.loads(report_path.read_text()).get("best_trial", -1))
-        != best_trial.number
-    ):
-        raise FileNotFoundError(
-            f"Best trial checkpoint is missing for seed {seed}, {percent}%."
-        )
-
+    _set_seed(seed)
     model = _model(args, device)
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    with _working_directory(fraction_dir):
+        fold_losses, trained_model, mean_validation_loss = train_model_k_fold(
+            model,
+            training_graphs,
+            k=args.folds,
+            learning_rate=args.learning_rate,
+            epochs=args.epochs,
+            clip_value=args.clip_value,
+            noise_level=args.noise,
+            penalty_weight=args.penalty_weight,
+            device=str(device),
+            Lambda=args.Lambda,
+            decay=args.decay,
+            max_phy_loss=args.max_phy_loss,
+            batch_size=32
+        )
+
     validation_metrics = _evaluate_graphs(
-        model, validation_graphs, validation_sources, device
+        trained_model, validation_graphs, validation_sources, device
     )
-    test_metrics = _evaluate_graphs(model, test_graphs, test_sources, device)
-    del model
+    test_metrics = _evaluate_graphs(
+        trained_model, test_graphs, test_sources, device
+    )
+
+    model_path = run_dir / "model.pth"
+    torch.save(trained_model.state_dict(), model_path)
+    parser.save_scaler(str(run_dir / "scaler.pkl"))
 
     report = {
         "seed": seed,
         "fraction": fraction,
-        "selection_metric": "training_geometry_holdout.rmse",
-        "test_geometry_used_for_selection": False,
         "n_selected": len(selected_indices),
         "n_training": len(fit_indices),
         "n_validation": len(validation_indices),
         "n_test_cases": len(test_graphs),
         "selection_split_seed": selection_split_seed,
         "cv_split_seed": CV_RANDOM_STATE,
-        "scaling_centers": centers,
-        "best_trial": best_trial.number,
-        "validation_rmse": float(best_trial.value),
-        "cv_mean_validation_loss": best_trial.user_attrs.get(
-            "cv_mean_validation_loss"
-        ),
-        "fold_validation_losses": best_trial.user_attrs.get("fold_validation_losses"),
+        "fold_validation_losses": [float(v) for v in fold_losses],
+        "cv_mean_validation_loss": float(mean_validation_loss),
         "validation_geometry": validation_metrics,
+        "validation_rmse": float(validation_metrics["rmse"]),
         "final_test_geometry": test_metrics,
         "test_rmse": float(test_metrics["rmse"]),
-        "best_params": best_trial.params,
-        "hyperparameters": {
-            **_fixed_hyperparameters(args),
-            **best_trial.params,
-        },
+        "hyperparameters": _hyperparameters(args),
         "checkpoint": str(model_path),
         "scaler": str(run_dir / "scaler.pkl"),
         "split": str(fraction_dir / "split.json"),
     }
-    _write_json(report_path, report)
-    parser.save_scaler(str(run_dir / "scaler.pkl"))
-    _write_study_summary(study, fraction_dir / "study_summary.json", centers)
+    _write_json(run_dir / "report.json", report)
     _write_aggregate(output_dir, report)
 
-    for trial in study.trials:
-        (trials_dir / f"trial_{trial.number:03d}.pt").unlink(missing_ok=True)
-
+    del model, trained_model
     del training_graphs, validation_graphs, test_graphs, all_evaluation_graphs
     parser.nn_training_set = None
     parser.nn_test_set = None
@@ -922,8 +713,6 @@ def _run_fraction(
         torch.cuda.empty_cache()
     print(
         f"Seed {seed}, {percent}% complete: "
-        f"best trial {best_trial.number} "
-        f"params={best_trial.params}, "
         f"validation RMSE {report['validation_rmse']:.6g}, "
         f"new-geometry test RMSE {report['test_rmse']:.6g}"
     )
@@ -933,8 +722,6 @@ def _run_fraction(
 def run(args: argparse.Namespace) -> None:
     if args.epochs < 1 or args.folds < 2:
         raise ValueError("--epochs must be positive; --folds must be at least 2.")
-    if args.n_trials < 1:
-        raise ValueError("--n-trials must be positive.")
     if not 0 < args.test_size < 1:
         raise ValueError("--test-size must be between 0 and 1.")
     if not args.seeds or len(set(args.seeds)) != len(args.seeds):
@@ -945,8 +732,6 @@ def run(args: argparse.Namespace) -> None:
         raise ValueError("--fractions must contain unique fractions.")
     if args.learning_rate <= 0 or args.decay < 0:
         raise ValueError("--learning-rate must be positive; --decay must be non-negative.")
-    if args.n_ref < 1 or args.batch_size_ref < 1:
-        raise ValueError("--n-ref and --batch-size-ref must be positive integers.")
     if args.hidden_channels < 1 or args.heads < 1 or args.hop < 1:
         raise ValueError("--hidden-channels, --heads, and --hop must be positive integers.")
 
@@ -969,10 +754,7 @@ def run(args: argparse.Namespace) -> None:
             print(f"Training geometries: {train_dir}")
             print(f"Final test geometries: {test_dir}")
             print(f"Output: {output_dir}")
-            print(
-                "Fixed hyperparameters / scaling refs: "
-                f"{json.dumps(_fixed_hyperparameters(args), sort_keys=True)}"
-            )
+            print(f"Hyperparameters: {json.dumps(_hyperparameters(args), sort_keys=True)}")
 
             parser = _make_parser(train_dir, device, args.test_size)
             cases = _load_cases(train_dir, validation=False)
