@@ -2,15 +2,16 @@
 
 ## Where to retrieve the split
 
-The split is the list of which CFD cases were used to fit the model and which were held out. It is not inside `hp_search_report/` or `train_hf_scaling_report/`. Those folders only store scores. The unseen sweep-60° and sweep-70° wings in `dataset/new_geom` are never listed in these split files; they are the test geometries scored after training.
+The split is the list of which CFD cases were used to fit the model and which were held out. It is not inside `hp_search_report/` or the `*_scaling_report/` folders. Those folders only store scores. The unseen sweep-60° and sweep-70° wings in `dataset/new_geom/lhs-free-stream` are never listed in these split files; they are the test geometries scored after training.
 
-### Scaling runs (seeds 7, 27, 3407)
+### Scaling runs (seeds 7, 27, 3407, 207, 353)
 
-Retrieve the split from the CSV in that seed’s folder:
+Retrieve the HF split from the CSV in that seed’s folder under `train_hf_scaling_results/`:
 
-- `train_hf_scaling_results_seed7/train_set_split.csv`
-- `train_hf_scaling_results_seed27/train_set_split.csv`
-- `train_hf_scaling_results_seed3407/train_set_split.csv`
+- `train_hf_scaling_results/train_hf_scaling_results_seed7/train_set_split.csv`
+- `train_hf_scaling_results/train_hf_scaling_results_seed27/train_set_split.csv`
+- `train_hf_scaling_results/train_hf_scaling_results_seed3407/train_set_split.csv`
+- (same pattern for seeds 207 and 353)
 
 One file holds all four snapshots for that seed. Filter on `fraction`:
 
@@ -42,5 +43,7 @@ Each study folder has the same split in two forms: `train_set_split.txt` (table)
 - `Oct26_Optuna_VortexNet_all_geoms` — Oct 26 single-fidelity VortexNet (CFD in, ΔCp out) on all training geometries. Hyperparameter report: `hp_search_report/`.
 - `Oct26_Optuna_Vortexnet_SF_550010_7030split` — same model, sweep 55° NACA 0010 only.
 - `Oct26_Optuna_Vortexnet_SF_550010_8020split` — same model, sweep 55° NACA 0010 only.
-- `train_hf_scaling_results_seed7`, `train_hf_scaling_results_seed27`, `train_hf_scaling_results_seed3407` — Optuna search at each nested snapshot. Per-snapshot report: `fraction_20/hp_search_report/` (and `fraction_40`, `fraction_60`, `fraction_80`).
-- `train_hf_scaling_report` — mean test error of the three seeds versus snapshot size. Figure: `figures/test_error_vs_training_snapshots.png`.
+- `train_hf_scaling_results/` — HF autoregressor Optuna scaling (seeds 7, 27, 207, 353, 3407).
+- `train_mf_scaling_results/` — MF fixed-hyperparameter scaling.
+- `train_mf_scaling_autohp_results/` — MF scaling with batch-size / LR Optuna.
+- `train_hf_scaling_report/`, `train_mf_scaling_report/`, `train_mf_scaling_autohp_report/` — cross-seed mean test error on lhs-free-stream versus snapshot size (`figures/test_error_vs_training_snapshots.png`). Regenerate with `python report_all_scaling.py`.

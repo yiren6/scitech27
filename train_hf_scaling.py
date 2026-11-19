@@ -66,8 +66,14 @@ SPLIT_COLUMNS = (
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--train-dir", default=str(REPO_ROOT / "dataset" / "train_set"))
-    parser.add_argument("--test-dir", default=str(REPO_ROOT / "dataset" / "new_geom"))
+    parser.add_argument(
+        "--train-dir",
+        default="/home/yiren/Desktop/MF-VortexNet/dataset/train_set",
+    )
+    parser.add_argument(
+        "--test-dir",
+        default="/home/yiren/Desktop/MF-VortexNet/dataset/new_geom/lhs-free-stream",
+    )
     parser.add_argument(
         "--output-dir",
         default=str(REPO_ROOT / "train_hf_scaling_results"),

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Pair plot of independent variables for training and validation geometries.
+"""Pair plot of independent variables for Train and generalized geometries.
 
-Loads MF pickle cases from the training-geometry and validation-geometry
-directories, extracts (Re, M, α, NACA camber X%, NACA thickness ZE%, Λ),
-and draws a lower-triangle scatter pair plot with per-split KDEs on the
-diagonal. The upper triangle is left empty.
+Loads MF pickle cases from the Train-geometry set and the lhs-free-stream
+generalized-geometry test set, extracts
+(Re, M, α, NACA camber X%, NACA thickness ZE%, Λ), and draws a lower-triangle
+scatter pair plot with per-split KDEs on the diagonal. The upper triangle is
+left empty.
 """
 
 from __future__ import annotations
@@ -23,8 +24,10 @@ import seaborn as sns
 
 PLOTS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = PLOTS_DIR.parent
-DEFAULT_TRAIN_DIR = Path("/Users/yirenshen/Desktop/MF-VortexNet/dataset/train_set")
-DEFAULT_TEST_DIR = Path("/Users/yirenshen/Desktop/MF-VortexNet/dataset/new_geom")
+DEFAULT_TRAIN_DIR = Path("/home/yiren/Desktop/MF-VortexNet/dataset/train_set")
+DEFAULT_TEST_DIR = Path(
+    "/home/yiren/Desktop/MF-VortexNet/dataset/new_geom/lhs-free-stream"
+)
 DEFAULT_OUTPUT = PLOTS_DIR / "independent_variable_pairplot.png"
 
 FILENAME_RE = re.compile(r"_sweep_(\d+)_naca_(\d+)", re.IGNORECASE)
@@ -126,11 +129,22 @@ def _load_cases(directory: Path, *, validation: bool) -> list:
         raise FileNotFoundError(f"Dataset directory does not exist: {directory}")
     files = sorted(directory.glob("pklData_*.pkl"))
     if validation:
-        files = [path for path in files if "validation" in path.name]
+        # Prefer *_validation.pkl / *_vortexNetNewGeom.pkl; fall back to all
+        # files in directories such as lhs-free-stream.
+        preferred = [
+            path
+            for path in files
+            if "validation" in path.name or "vortexNetNewGeom" in path.name
+        ]
+        files = preferred or files
     else:
-        files = [path for path in files if "validation" not in path.name]
+        files = [
+            path
+            for path in files
+            if "validation" not in path.name and "vortexNetNewGeom" not in path.name
+        ]
     if not files:
-        split_name = "validation" if validation else "training"
+        split_name = "validation" if validation else "Train"
         raise FileNotFoundError(f"No {split_name} pklData files found in {directory}.")
 
     cases = []
@@ -179,9 +193,9 @@ def build_pairplot(df: pd.DataFrame, output_path: Path, font_size: int = 20) -> 
         }
     )
 
-    hue_order = ["Training", "Validation"]
-    palette = {"Training": "#1f77b4", "Validation": "#d62728"}
-    markers = {"Training": "o", "Validation": "^"}
+    hue_order = ["Train", "Test"]
+    palette = {"Train": "#1f77b4", "Test": "#d62728"}
+    markers = {"Train": "o", "Test": "^"}
 
     plot_df = df.copy()
     # Compact Re axis for readability while keeping the Re label.
@@ -245,7 +259,7 @@ def build_pairplot(df: pd.DataFrame, output_path: Path, font_size: int = 20) -> 
             color="none",
             markerfacecolor=palette[name],
             markeredgecolor="white",
-            markersize=12 if name == "Training" else 13,
+            markersize=12 if name == "Train" else 13,
             label=name,
         )
         for name in hue_order
@@ -281,24 +295,37 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     _register_mfdata()
 
-    train_cases = _load_cases(args.train_dir.expanduser().resolve(), validation=False)
-    test_cases = _load_cases(args.test_dir.expanduser().resolve(), validation=True)
+    train_dir = args.train_dir.expanduser().resolve()
+    test_dir = args.test_dir.expanduser().resolve()
+    print(f"Train geometries: {train_dir}")
+    print(f"Test geometries:     {test_dir}")
+
+    train_cases = _load_cases(train_dir, validation=False)
+    test_cases = _load_cases(test_dir, validation=True)
 
     df = pd.concat(
         [
-            cases_to_dataframe(train_cases, "Training"),
-            cases_to_dataframe(test_cases, "Validation"),
+            cases_to_dataframe(train_cases, "Train"),
+            cases_to_dataframe(test_cases, "Test"),
         ],
         ignore_index=True,
     )
     print(
         f"Pair-plot rows: {len(df)} "
-        f"(Training={int((df['split'] == 'Training').sum())}, "
-        f"Validation={int((df['split'] == 'Validation').sum())})"
+        f"(Train={int((df['split'] == 'Train').sum())}, "
+        f"Test={int((df['split'] == 'Test').sum())})"
     )
     print(df.groupby("split")[VARS].agg(["min", "max"]).to_string())
 
-    build_pairplot(df, args.output.expanduser().resolve(), font_size=args.font_size)
+    # Backup the previous figure if present, then overwrite.
+    output = args.output.expanduser().resolve()
+    if output.is_file():
+        backup = output.with_name(output.stem + "_aoa_sweep_backup" + output.suffix)
+        if not backup.exists():
+            backup.write_bytes(output.read_bytes())
+            print(f"Backed up previous figure to {backup}")
+
+    build_pairplot(df, output, font_size=args.font_size)
 
 
 if __name__ == "__main__":

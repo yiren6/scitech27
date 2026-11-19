@@ -112,8 +112,19 @@ def _load_pickle(path: Path):
 def _case_files(directory: Path, validation: bool) -> list[Path]:
     files = sorted(directory.glob("pklData_*.pkl"))
     if validation:
-        return [path for path in files if "validation" in path.name]
-    return [path for path in files if "validation" not in path.name]
+        # Prefer *_validation.pkl / *_vortexNetNewGeom.pkl; fall back to all
+        # files for directories like lhs-free-stream.
+        preferred = [
+            path
+            for path in files
+            if "validation" in path.name or "vortexNetNewGeom" in path.name
+        ]
+        return preferred or files
+    return [
+        path
+        for path in files
+        if "validation" not in path.name and "vortexNetNewGeom" not in path.name
+    ]
 
 
 def load_cases(
@@ -771,13 +782,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--train-dir",
-        default=str(REPO_ROOT / "dataset" / "train_set"),
+        default="/home/yiren/Desktop/MF-VortexNet/dataset/train_set",
         help="Directory of training-geometry pklData files.",
     )
     parser.add_argument(
         "--test-dir",
-        default=str(REPO_ROOT / "dataset" / "new_geom"),
-        help="Directory of test-geometry validation pklData files.",
+        default="/home/yiren/Desktop/MF-VortexNet/dataset/new_geom/lhs-free-stream",
+        help="Directory of generalized-geometry test pklData files.",
     )
     parser.add_argument(
         "--output-dir",

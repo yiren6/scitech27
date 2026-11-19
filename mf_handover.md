@@ -108,3 +108,127 @@ Syntax and CLI checks passed. Smoke checks successfully loaded and constructed
 one graph from each dataset, verified outer and CV split-manifest writing,
 checked metric aggregation, and confirmed the Optuna objective/test-scoring
 ordering. The full scaling training sweep has **not** been run yet.
+
+---
+
+## Revision log — 2026-11-18
+
+Implemented on **2026-11-18**. The original runs below had scored the wrong
+generalized-geometry test set. Model weights were kept; test metrics, reports,
+and figures were regenerated on the correct lhs-free-stream cases.
+
+### Wrong vs correct test data
+
+- **Incorrect (original scoring):** `*_validation.pkl` AoA-sweep freestreams
+  (fixed \(M=0.4\), \(\mathrm{Re}=7\times10^6\)), historically under
+  `dataset/new_geom` / `cst-free-stream(aoa-sweep)`.
+- **Correct:**  
+  `/home/yiren/Desktop/MF-VortexNet/dataset/new_geom/lhs-free-stream`  
+  (`*_vortexNetNewGeom.pkl`, 4 files × 11 cases = 44 LHS freestreams).
+- **Training geometries (unchanged):**  
+  `/home/yiren/Desktop/MF-VortexNet/dataset/train_set` (15 pickles, 600 cases).
+
+### Backup of prior accuracy / history
+
+Directory: `backup_wrong_aoa_test_20261118/`
+
+Contains prior `report.json`, `scaling_results.*`, logs, splits, and
+`train_hf_scaling_report/` from before rescoring. Model weights were **not**
+copied; they remained in the live result trees.
+
+Also: `plots/independent_variable_pairplot_aoa_sweep_backup.png` is the
+previous pair plot that used the AoA-sweep validation set.
+
+### Rescoring from saved checkpoints
+
+Script: `rescore_lhs_freestream.py`
+
+Re-evaluated saved weights on lhs-free-stream without retraining:
+
+| Tree | What was updated |
+|---|---|
+| `train_mf_scaling_results/` | 40 `run/report.json` + aggregates |
+| `train_mf_scaling_autohp_results/` | 40 `run/report.json` + aggregates |
+| `train_hf_scaling_results/` | 35 `best/report.json` + per-seed aggregates |
+
+Holdout / validation metrics and checkpoints were left unchanged. HF
+**per-trial** `report.json` test fields still reflect the old AoA-sweep set;
+only best-checkpoint scores feed the aggregates.
+
+```bash
+python rescore_lhs_freestream.py            # hf + mf + autohp
+python rescore_lhs_freestream.py --which hf
+```
+
+### Default paths and loaders (future runs)
+
+Updated so new runs do not re-pick the AoA-sweep validation files:
+
+- `train_mf_scaling.py`, `train_mf_scaling_autohp.py`, `train_hf_scaling.py`,
+  `train_hf_autoregressor.py`
+- Defaults: absolute `MF-VortexNet` `train_set` and `lhs-free-stream`
+- Loaders accept `*_vortexNetNewGeom.pkl` (not only `*validation*`)
+- MF import root set to `/home/yiren/Desktop/MF-VortexNet` (old
+  `/home/yiren/cnfvortexnetff` path is gone on this machine)
+
+### Reports and scaling figures
+
+Script: `report_all_scaling.py`
+
+Writes durable cross-seed reports:
+
+- `train_hf_scaling_report/`
+- `train_mf_scaling_report/`
+- `train_mf_scaling_autohp_report/`
+
+Each report folder has `report.md`, `seed_average.csv`, `per_seed.json`, and
+**one figure per metric** (not a 1×3 panel):
+
+- `figures/test_rmse_vs_training_snapshots.png`
+- `figures/test_mae_vs_training_snapshots.png`
+- `figures/test_nrmse_std_vs_training_snapshots.png`
+
+Figure style (2026-11-18):
+
+- Labels **Run 1 … Run 5** (sorted seed order: 7, 27, 207, 353, 3407), not
+  “Seed \(x\)”
+- Log–log axes on both \(x\) and \(y\)
+- Individual runs at **50%** opacity (`alpha=0.5`)
+- Mean of 5 runs solid; mean linewidth = **1.5×** individual-run linewidth
+- ±1 sample-std band around the mean retained
+
+HF/MF mean overlays (also one file per metric):
+
+- `figures/hf_mf_test_rmse_overlay.png`
+- `figures/hf_mf_test_mae_overlay.png`
+- `figures/hf_mf_test_nrmse_std_overlay.png`
+
+```bash
+python report_all_scaling.py
+```
+
+### Independent-variable pair plot
+
+Script: `plots/plot_independent_variable_pairplot.py`
+
+- Defaults point at `train_set` + `lhs-free-stream`
+- Loader accepts `*_vortexNetNewGeom.pkl`
+- Legend: **Training** / **Test**
+- Output: `plots/independent_variable_pairplot.png` (600 + 44 cases)
+
+```bash
+python plots/plot_independent_variable_pairplot.py
+```
+
+### Docs touched
+
+- `readme.md` — report folder paths and lhs-free-stream test-set wording
+- `mf_scaling_analysis.ipynb`, `mf_scaling_analysis_with_hpo.ipynb` —
+  markdown updated to mention lhs-free-stream
+- This file (`mf_handover.md`) — this revision log
+
+### Note on earlier sections of this handover
+
+Sections above this revision log still describe the original MF runner design
+and may mention `dataset/new_geom` validation pickles / `cnfvortexnetff`. For
+**current** data paths, scoring, and reporting, prefer this 2026-11-18 section.

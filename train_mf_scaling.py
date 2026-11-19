@@ -35,7 +35,7 @@ import torch
 from sklearn.model_selection import KFold, train_test_split
 
 REPO_ROOT = Path(__file__).resolve().parent
-CNF_ROOT = Path("/home/yiren/cnfvortexnetff")
+CNF_ROOT = Path("/home/yiren/Desktop/MF-VortexNet")
 sys.path.insert(0, str(CNF_ROOT / "VortexNet"))
 sys.path.insert(0, str(CNF_ROOT))
 
@@ -90,8 +90,10 @@ CV_SPLIT_COLUMNS = (
     "Re",
 )
 
-TRAIN_DIR = REPO_ROOT / "dataset" / "train_set"
-TEST_DIR = REPO_ROOT / "dataset" / "new_geom"
+TRAIN_DIR = Path("/home/yiren/Desktop/MF-VortexNet/dataset/train_set")
+TEST_DIR = Path(
+    "/home/yiren/Desktop/MF-VortexNet/dataset/new_geom/lhs-free-stream"
+)
 
 
 class _Tee:
@@ -294,9 +296,20 @@ def _load_cases(directory: Path, *, validation: bool) -> list:
         raise FileNotFoundError(f"Dataset directory does not exist: {directory}")
     files = sorted(directory.glob("pklData_*.pkl"))
     if validation:
-        files = [path for path in files if "validation" in path.name]
+        # Prefer explicit validation / new-geom pickles; fall back to all files
+        # in directories such as lhs-free-stream (*_vortexNetNewGeom.pkl).
+        preferred = [
+            path
+            for path in files
+            if "validation" in path.name or "vortexNetNewGeom" in path.name
+        ]
+        files = preferred or files
     else:
-        files = [path for path in files if "validation" not in path.name]
+        files = [
+            path
+            for path in files
+            if "validation" not in path.name and "vortexNetNewGeom" not in path.name
+        ]
     if not files:
         split_name = "validation" if validation else "training"
         raise FileNotFoundError(f"No {split_name} pklData files found in {directory}.")
@@ -454,7 +467,10 @@ def _write_aggregate(output_dir: Path, result: dict) -> None:
             "updated": datetime.now().isoformat(timespec="seconds"),
             "subset_sampling": "Nested random subsets of dataset/train_set per seed.",
             "validation_split": "70/30 training/validation within each nested subset.",
-            "test_set": "dataset/new_geom (reported only; not used for selection).",
+            "test_set": (
+                "dataset/new_geom/lhs-free-stream "
+                "(reported only; not used for selection)."
+            ),
             "results": results,
         },
     )
